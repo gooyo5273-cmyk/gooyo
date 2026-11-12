@@ -69,11 +69,13 @@ svg .v{fill:var(--text);font-weight:600}
 <header>
   <div>
     <h1>주조 생산실적 분석</h1>
+    <div class="sub" id="moninfo"></div>
     <div class="sub" id="fileinfo">SAP 생산실적 EXPORT 파일을 불러오세요 · 데이터는 이 PC 밖으로 전송되지 않습니다</div>
   </div>
   <div class="sp"></div>
   <div class="row noprint">
     <label class="btn">SAP 파일 열기<input type="file" id="fSap" accept=".xlsx,.xls,.csv" hidden></label>
+    <label class="btn">Fact Book 열기<input type="file" id="fMon" accept=".xlsx,.xls" hidden></label>
     <button id="bXlsx" class="primary" disabled>엑셀 보고서 저장</button>
     <button id="bPrint" disabled>인쇄</button>
   </div>
@@ -83,6 +85,7 @@ svg .v{fill:var(--text);font-weight:600}
     <div class="drop" id="drop">
       <strong>SAP에서 내려받은 생산실적 EXPORT 엑셀을 여기에 끌어다 놓으세요</strong>
       <p class="sub">필요 컬럼: 실제 종료일 · 작업장 · 자재 · 자재 번호 · 양품/불량품 구분 · 생산수량 (금형 · 비고는 있으면 사용)</p>
+      <p class="sub">양품수율 Fact Book('주조양품수율' 시트)을 함께 놓으면 분모를 생산수량(모니터링) 기준으로 계산합니다</p>
       <p class="sub" id="masterinfo"></p>
     </div>
   </div>
@@ -115,12 +118,32 @@ const vName = v => String(v || "").replace(/^\d+/, "");
 const ymLabel = ym => ym.slice(2, 4) + "." + (+ym.slice(5)) + "월";
 
 const S = { master: null, masterSrc: "기본 내장(10월 양품수율 파일 '불량수량' 시트)", rows: null, file: "", tab: "sum",
-            ymFrom: null, ymTo: null, gu: null, plan: null, planFile: "", planYm: null, sort: {}, q: "" };
+            ymFrom: null, ymTo: null, gu: null, plan: null, planFile: "", mon: null, planYm: null, sort: {}, q: "" };
 
 /* ---------- 관리 품번 리스트 ---------- */
 function loadMaster() {
   try { const j = localStorage.getItem("castMaster"); if (j) { const o = JSON.parse(j); if (o.list && o.list.length) { S.master = o.list; S.masterSrc = o.src; return; } } } catch (e) {}
   S.master = DEFAULT_MASTER;
+}
+function loadMon() { try { const j = localStorage.getItem("castMon"); if (j) { const o = JSON.parse(j); if (o && o.mach && o.mach.length) S.mon = o; } } catch (e) {} }
+function grid(ws) { const rg = XLSX.utils.decode_range(ws["!ref"] || "A1"); rg.s.r = 0; rg.s.c = 0; return XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, range: rg }); }
+/* Fact Book: '주조양품수율' 시트의 호기별 월별 생산수량(모니터링) + '물대실적' 시트의 작업장↔호기 대응표 */
+function parseMon(wb) {
+  const ws = wb.Sheets["주조양품수율"]; if (!ws) throw new Error("'주조양품수율' 시트를 찾지 못했습니다.");
+  const a = grid(ws), has = v => typeof v === "string" && v.includes("모니터링");
+  const hr = a.findIndex(r => (r || []).some(has)); if (hr < 0) throw new Error("'주조양품수율' 시트에서 '생산수량(모니터링)' 머리글을 찾지 못했습니다.");
+  let cols = a[hr].map((v, i) => has(v) ? i : -1).filter(i => i >= 0);
+  if (cols.length === 13) cols = cols.slice(1); if (cols.length !== 12) throw new Error("월별 '생산수량(모니터링)' 열이 12개가 아닙니다 (" + cols.length + "개).");
+  const dc = new Map();
+  for (const sn of wb.SheetNames) if (sn.includes("물대실적")) for (const r of grid(wb.Sheets[sn])) for (let c = 0; c < r.length - 2; c++)
+    if (typeof r[c] === "string" && /^DC\d{4}$/.test(r[c].trim()) && typeof r[c + 2] === "string") dc.set(r[c + 2].trim(), r[c].trim());
+  const mach = []; let ven = null;
+  for (let r = hr + 1; r < a.length; r++) { const x = a[r] || [], A = String(x[0] ?? "").trim(); if (A === "합계") break;
+    const lab = typeof x[1] === "string" ? x[1].trim() : ""; if (!lab) continue;
+    if (typeof x[3] === "string" && x[3].trim()) ven = x[3].trim(); if (!ven) continue;
+    mach.push({ lab, ven: vName(ven), dc: dc.get(lab) || null, m: cols.map(c => typeof x[c] === "number" ? x[c] : 0) }); }
+  if (!mach.length) throw new Error("호기별 모니터링수량을 한 건도 읽지 못했습니다.");
+  return { mach };
 }
 function parseMasterSheet(wb) {
   const ws = wb.Sheets["불량수량"]; if (!ws) return null;
@@ -178,14 +201,19 @@ function compute() {
   const M = S.master, cast = new Map(), down = new Map();
   M.forEach((e, i) => { cast.set(e[3], i); e[4].forEach((d, j) => { if (d && !down.has(d)) down.set(d, [i, j]); }); });
   const inP = r => r.ym >= S.ymFrom && r.ym <= S.ymTo, inG = i => S.gu.has(String(M[i][0]));
-  const R = { all: Z(), ym: new Map(), ven: new Map(), venYm: new Map(), eq: new Map(), ent: new Map(), wc: new Map(), mold: new Map(), day: new Map(), off: new Map(), days: new Set(), notes: 0 };
+  const allGu = new Set(M.map(e => String(e[0]))).size === S.gu.size, useMon = !!S.mon && allGu;
+  const wcVen = new Map(); if (useMon) for (const k of S.mon.mach) if (k.dc) wcVen.set(k.dc, k.ven);
+  const R = { useMon, monOff: !!S.mon && !allGu, noMap: new Map(), mach: [], noMon: [], all: Z(), ym: new Map(), ven: new Map(), venYm: new Map(), eq: new Map(), ent: new Map(), wc: new Map(), mold: new Map(), day: new Map(), off: new Map(), days: new Set(), notes: 0 };
   for (const r of S.rows) {
     if (!inP(r)) continue;
     const ci = cast.get(r.mat);
     if (ci != null && (r.good || r.bad)) {
       if (!inG(ci)) continue;
-      const e = M[ci], h = r.good ? r.q : 0;
-      for (const o of [R.all, add(R.ym, r.ym), add(R.ven, e[1]), add(R.venYm, e[1] + "|" + r.ym), add(R.eq, e[1] + "|" + e[2]), add(R.ent, ci)]) { o.g += r.q; o.h += h; }
+      const e = M[ci], h = r.good ? r.q : 0, mv = vName(e[1]);
+      let v = mv; if (useMon) { v = wcVen.get(r.wc); if (!v) { v = mv; R.noMap.set(r.wc, (R.noMap.get(r.wc) || 0) + r.q); } }
+      // 모니터링 기준: 업체는 생산 호기(작업장) 기준, 분모(g)는 아래에서 모니터링수량으로 채운다
+      for (const o of [R.all, add(R.ym, r.ym), add(R.ven, v), add(R.venYm, v + "|" + r.ym)]) { if (!useMon) o.g += r.q; o.h += h; }
+      for (const o of [add(R.eq, e[1] + "|" + e[2]), add(R.ent, ci)]) { o.g += r.q; o.h += h; }
       let w = R.wc.get(r.wc); if (!w) R.wc.set(r.wc, w = { g: 0, h: 0, days: new Set(), ven: new Map(), parts: new Set() });
       w.g += r.q; w.h += h; if (r.q > 0) w.days.add(r.day); w.parts.add(r.mat); w.ven.set(e[1], (w.ven.get(e[1]) || 0) + r.q);
       const mk = r.mold + "|" + r.mat; let mo = R.mold.get(mk); if (!mo) R.mold.set(mk, mo = { mold: r.mold, ci, g: 0, h: 0 });
@@ -198,10 +226,20 @@ function compute() {
     if (di && r.bad) {
       if (!inG(di[0])) continue;
       const e = M[di[0]], st = STAGE_OF[di[1]];
-      for (const o of [R.all, add(R.ym, r.ym), add(R.ven, e[1]), add(R.venYm, e[1] + "|" + r.ym), add(R.eq, e[1] + "|" + e[2]), add(R.ent, di[0])]) { o.d += r.q; o.s[st] += r.q; }
+      const v = vName(e[1]);
+      for (const o of [R.all, add(R.ym, r.ym), add(R.ven, v), add(R.venYm, v + "|" + r.ym), add(R.eq, e[1] + "|" + e[2]), add(R.ent, di[0])]) { o.d += r.q; o.s[st] += r.q; }
       continue;
     }
     if (r.wc.startsWith("DC") && (r.good || r.bad)) { let o = R.off.get(r.mat); if (!o) R.off.set(r.mat, o = { name: r.name, g: 0, h: 0 }); o.g += r.q; if (r.good) o.h += r.q; }
+  }
+  if (useMon) {
+    const yr = S.rows.reduce((m, r) => r.ym > m ? r.ym : m, "").slice(0, 4);          // 모니터링수량은 SAP 데이터의 최근 연도에 적용
+    for (const k of S.mon.mach) { let g = 0;
+      k.m.forEach((q, i) => { const ym = yr + "-" + String(i + 1).padStart(2, "0"); if (!q || ym < S.ymFrom || ym > S.ymTo) return;
+        g += q; for (const o of [R.all, add(R.ym, ym), add(R.ven, k.ven), add(R.venYm, k.ven + "|" + ym)]) o.g += q; });
+      const w = k.dc && R.wc.get(k.dc), h = w ? w.h : 0;
+      if (g || h) R.mach.push({ lab: k.lab, dc: k.dc || "(대응 없음)", ven: k.ven, g, h, bad: g - h, own: g ? (g - h) / g : null }); }
+    for (const [ym, o] of R.ym) if (!o.g && o.h) R.noMon.push(ym);
   }
   return R;
 }
@@ -216,7 +254,14 @@ function table(id, cols, rows, total) {
     (total ? `<tr class="tot">${cols.map(c => cell(c, total)).join("")}</tr>` : "") + `</tbody></table></div>`;
 }
 const N = (k, t) => ({ k, t, n: 1, f: fN }), P = (k, t, d) => ({ k, t, n: 1, p: 1, f: v => fP(v, d) });
-const yieldCols = [N("g", "주조 생산수량"), N("h", "양품수량"), N("bad", "자공정 불량"), N("d", "후공정 불량"), N("i", "최종 양품"), P("own", "자공정 불량률"), P("post", "후공정 불량률"), P("y", "양품수율")];
+const gLab = () => R && R.useMon ? "생산수량(모니터링)" : "주조 생산수량(SAP)";
+const yCols = () => [N("g", gLab()), N("h", "양품수량(SAP)"), N("bad", "자공정 불량"), N("d", "후공정 불량"), N("i", "최종 양품"), P("own", "자공정 불량률"), P("post", "후공정 불량률"), P("y", "양품수율")];
+const machCols = [{ k: "lab", t: "호기" }, { k: "dc", t: "작업장" }, { k: "ven", t: "업체" }, N("g", "생산수량(모니터링)"), N("h", "양품수량(SAP)"), N("bad", "자공정 불량"), P("own", "자공정 불량률")];
+function basisNote() {
+  if (R.useMon) return `<div class="note">분모 = 생산수량(모니터링) · ${esc(S.mon.src)} · 업체는 생산 호기 기준, 후공정 불량은 품번의 관리 리스트 업체 기준${R.noMon.length ? ` · <b>모니터링수량이 없는 월: ${R.noMon.map(ymLabel).join(", ")}</b>` : ""}</div>`;
+  if (R.monOff) return `<div class="warn">모니터링수량은 구분(양산/A/S 등)별로 나눌 수 없어, 구분을 일부만 선택한 동안에는 SAP 생산수량 기준으로 계산합니다.</div>`;
+  return `<div class="warn noprint">현재 분모는 <b>SAP 생산수량(양품+불량)</b>입니다. 상단의 <b>Fact Book 열기</b>로 양품수율 Fact Book을 불러오면 생산수량(모니터링) 기준으로 계산합니다.</div>`;
+}
 
 /* ---------- 차트 (SVG) ---------- */
 function tipAttr(html) { return `data-tip="${esc(html)}"`; }
@@ -260,38 +305,40 @@ const TABS = [["sum", "요약"], ["yield", "양품수율"], ["part", "품번별"
 let R = null;
 function months() { return [...new Set(S.rows.map(r => r.ym))].sort(); }
 function selMonths() { return months().filter(m => m >= S.ymFrom && m <= S.ymTo); }
-function vendors() { return [...new Set(S.master.map(e => e[1]))].sort(); }
+function vendors() { return [...new Set([...new Set(S.master.map(e => e[1]))].sort().map(vName))]; }
 
 function viewSum() {
   const t = met(R.all), ms = selMonths(), nd = R.days.size;
   const k = (lab, val, hint) => `<div class="card kpi"><div class="lab">${lab}</div><div class="val">${val}</div><div class="hint">${hint || ""}</div></div>`;
-  const ven = vendors().map(v => ({ name: vName(v), ...met(R.ven.get(v) || Z()) })).filter(v => v.g);
-  return `<div class="grid kpis">
-    ${k("양품수율", fP(t.y), "최종 양품 ÷ 주조 생산수량")}
-    ${k("자공정 불량률", fP(t.own), "주조 불량 " + fN(t.bad) + "개")}
+  const ven = vendors().map(v => ({ name: v, ...met(R.ven.get(v) || Z()) })).filter(v => v.g || v.h);
+  const mon = R.useMon;
+  return `${mon ? "" : basisNote()}<div class="grid kpis">
+    ${k("양품수율", fP(t.y), mon ? "최종 양품 ÷ 생산수량(모니터링)" : "최종 양품 ÷ 주조 생산수량(SAP)")}
+    ${k("자공정 불량률", fP(t.own), (mon ? "모니터링 − SAP 양품 " : "주조 불량 ") + fN(t.bad) + "개")}
     ${k("후공정 불량률", fP(t.post), "사상·가공·조립 불량 " + fN(t.d) + "개")}
-    ${k("주조 생산수량", fN(t.g), "양품 " + fN(t.h) + "개")}
+    ${k(mon ? "생산수량(모니터링)" : "주조 생산수량(SAP)", fN(t.g), "SAP 양품 " + fN(t.h) + "개")}
     ${k("일평균 생산수량", fN(nd ? t.g / nd : null), "실적 등록일 " + nd + "일 기준")}
   </div>
   <div class="grid two sec">
     <div class="card"><h2>월별 양품수율</h2><div class="sub">관리 품번 전체</div>${lineChart(ms.map(ymLabel), [{ name: "전체", c: "var(--s1)", v: ms.map(m => met(R.ym.get(m) || Z()).y) }], { endLabels: 1 })}</div>
-    <div class="card"><h2>월별 주조 생산수량</h2><div class="sub">양품 + 불량, 개</div>${barChart(ms.map(ymLabel), ms.map(m => (R.ym.get(m) || Z()).g), ms.map(m => { const x = met(R.ym.get(m) || Z()); return `<b>${ymLabel(m)}</b><br>생산 ${fN(x.g)}개<br>양품 ${fN(x.h)}개`; }))}</div>
-    <div class="card"><h2>업체별 월별 양품수율</h2><div class="legend">${ven.map((v, i) => `<span><i style="background:${VCOL[i]}"></i>${esc(v.name)}</span>`).join("")}</div>${lineChart(ms.map(ymLabel), vendors().filter(v => (R.ven.get(v) || Z()).g).map((v, i) => ({ name: vName(v), c: VCOL[i], v: ms.map(m => met(R.venYm.get(v + "|" + m) || Z()).y) })))}</div>
+    <div class="card"><h2>월별 ${mon ? "생산수량(모니터링)" : "주조 생산수량"}</h2><div class="sub">${mon ? "Fact Book 모니터링수량, 개" : "SAP 양품 + 불량, 개"}</div>${barChart(ms.map(ymLabel), ms.map(m => (R.ym.get(m) || Z()).g), ms.map(m => { const x = met(R.ym.get(m) || Z()); return `<b>${ymLabel(m)}</b><br>생산 ${fN(x.g)}개<br>양품 ${fN(x.h)}개`; }))}</div>
+    <div class="card"><h2>업체별 월별 양품수율</h2><div class="legend">${ven.map((v, i) => `<span><i style="background:${VCOL[i]}"></i>${esc(v.name)}</span>`).join("")}</div>${lineChart(ms.map(ymLabel), vendors().filter(v => { const o = R.ven.get(v) || Z(); return o.g || o.h; }).map((v, i) => ({ name: v, c: VCOL[i], v: ms.map(m => met(R.venYm.get(v + "|" + m) || Z()).y) })))}</div>
     <div class="card"><h2>업체별 불량률 구성</h2><div class="legend"><span><i style="background:var(--s1)"></i>자공정(주조) 불량률</span><span><i style="background:var(--s2)"></i>후공정 불량률</span></div>${stackH(ven)}</div>
   </div>
-  <div class="card sec"><h2>업체별 실적</h2>${table("sumVen", [{ k: "name", t: "업체" }, ...yieldCols], ven, { name: "합계", ...t })}
-  <div class="note">양품수율 = (주조 양품 − 후공정 불량) ÷ 주조 생산수량 · 후공정 불량은 관리 리스트의 사상·가공·조립/출하 품번에 등록된 불량수량을 주조 품번으로 귀속</div></div>`;
+  <div class="card sec"><h2>업체별 실적</h2>${table("sumVen", [{ k: "name", t: "업체" }, ...yCols()], ven, { name: "합계", ...t })}
+  <div class="note">양품수율 = (SAP 주조 양품 − 후공정 불량) ÷ ${mon ? "생산수량(모니터링)" : "주조 생산수량"} · 자공정 불량률 = ${mon ? "(생산수량(모니터링) − SAP 주조 양품) ÷ 생산수량(모니터링)" : "주조 불량 ÷ 주조 생산수량"} · 후공정 불량은 관리 리스트의 사상·가공·조립/출하 품번에 등록된 불량수량</div>${mon ? basisNote() : ""}</div>`;
 }
 function viewYield() {
   const ms = selMonths(), vs = vendors();
   const mk = key => { const row = {}; ms.forEach(m => row[m] = met((key === "*" ? R.ym.get(m) : R.venYm.get(key + "|" + m)) || Z()).y); return row; };
-  const rows = vs.map(v => ({ name: vName(v), ...mk(v), tot: met(R.ven.get(v) || Z()).y })).filter(r => r.tot != null);
+  const rows = vs.map(v => ({ name: v, ...mk(v), tot: met(R.ven.get(v) || Z()).y })).filter(r => r.tot != null);
   const cols = [{ k: "name", t: "업체" }, ...ms.map(m => P(m, ymLabel(m))), P("tot", "누계")];
   const mrows = ms.map(m => ({ name: ymLabel(m), ...met(R.ym.get(m) || Z()) }));
   const eq = [...R.eq.entries()].map(([k, o]) => { const [v, e] = k.split("|"); return { ven: vName(v), eq: e, sk: k, ...met(o) }; }).filter(r => r.g || r.d).sort((a, b) => a.sk.localeCompare(b.sk, "ko"));
-  return `<div class="card"><h2>업체별 월별 양품수율</h2>${table("yVenYm", cols, rows, { name: "합계", ...mk("*"), tot: met(R.all).y })}</div>
-  <div class="card sec"><h2>월별 실적</h2>${table("yYm", [{ k: "name", t: "월" }, ...yieldCols], mrows, { name: "누계", ...met(R.all) })}</div>
-  <div class="card sec"><h2>업체 · 설비(톤수)별 실적</h2>${table("yEq", [{ k: "ven", t: "업체" }, { k: "eq", t: "설비" }, ...yieldCols], eq)}</div>`;
+  return `${basisNote()}<div class="card sec"><h2>업체별 월별 양품수율</h2>${table("yVenYm", cols, rows, { name: "합계", ...mk("*"), tot: met(R.all).y })}</div>
+  <div class="card sec"><h2>월별 실적</h2>${table("yYm", [{ k: "name", t: "월" }, ...yCols()], mrows, { name: "누계", ...met(R.all) })}</div>
+  ${R.useMon ? `<div class="card sec"><h2>호기별 자공정 실적</h2><div class="sub">후공정 불량은 어느 호기에서 주조했는지 알 수 없어 호기별로는 자공정만 표시합니다</div>${table("mach", machCols, R.mach)}</div>`
+    : `<div class="card sec"><h2>업체 · 설비(톤수)별 실적</h2>${table("yEq", [{ k: "ven", t: "업체" }, { k: "eq", t: "설비" }, ...yCols()], eq)}</div>`}`;
 }
 function partRows() {
   return S.master.map((e, i) => { const o = R.ent.get(i); if (!o) return null; const m = met(o);
@@ -302,7 +349,7 @@ function viewPart() {
   let rows = partRows(); const q = S.q.trim().toLowerCase();
   if (q) rows = rows.filter(r => (r.mat + " " + r.name + " " + r.ven + " " + r.eq).toLowerCase().includes(q));
   if (!S.sort.part) S.sort.part = { i: 11, dir: -1 };
-  return `<div class="card"><div class="row"><h2>품번별 실적</h2><div class="sp"></div><input type="text" id="q" class="noprint" placeholder="품번 · 품명 · 업체 검색" value="${esc(S.q)}" style="width:240px"></div>
+  return `${S.mon ? `<div class="warn">모니터링수량은 호기 단위라 품번별로는 나눌 수 없습니다. 이 탭의 생산수량과 불량률은 <b>SAP 생산수량 기준</b>입니다.</div>` : ""}<div class="card"><div class="row"><h2>품번별 실적</h2><div class="sp"></div><input type="text" id="q" class="noprint" placeholder="품번 · 품명 · 업체 검색" value="${esc(S.q)}" style="width:240px"></div>
   <div class="sub">${rows.length}개 품번 · 열 제목을 누르면 정렬됩니다 (기본: 불량 합계 많은 순)</div>${table("part", partCols, rows)}</div>`;
 }
 function wcRows() {
@@ -318,7 +365,7 @@ function viewProd() {
   const w = wcRows(), t = met(R.all), nd = R.days.size; if (!S.sort.mold) S.sort.mold = { i: 6, dir: -1 };
   const wd = w.reduce((a, r) => a + r.days, 0);
   const k = (lab, val, hint) => `<div class="card kpi"><div class="lab">${lab}</div><div class="val">${val}</div><div class="hint">${hint || ""}</div></div>`;
-  return `<div class="warn">SAP EXPORT에는 가동시간·사이클타임·작업인원 정보가 없어 시간당 생산량(UPH)·인당 생산성은 계산할 수 없습니다. 여기서는 <b>호기별 가동일수와 일평균 생산수량</b>을 생산성 지표로 사용합니다.</div>
+  return `${S.mon ? `<div class="note" style="margin-bottom:8px">아래 호기·금형 표의 생산수량은 SAP 실적(양품+불량) 기준입니다. 모니터링 기준 호기별 자공정 실적은 '양품수율' 탭에 있습니다.</div>` : ""}<div class="warn">SAP EXPORT에는 가동시간·사이클타임·작업인원 정보가 없어 시간당 생산량(UPH)·인당 생산성은 계산할 수 없습니다. 여기서는 <b>호기별 가동일수와 일평균 생산수량</b>을 생산성 지표로 사용합니다.</div>
   <div class="grid kpis">
     ${k("가동 호기 수", w.length + "대", "기간 중 실적이 등록된 작업장")}
     ${k("호기·일당 평균 생산수량", fN(wd ? t.g / wd : null), "생산수량 ÷ 호기별 가동일수 합계")}
@@ -376,10 +423,13 @@ function viewChk() {
     <tr><td>데이터 기간</td><td>${ms[0]} ~ ${ms[ms.length - 1]} (${ms.length}개월)</td></tr>
     <tr><td>실적 행 수</td><td>${fN(S.rows.length)}행 (자재가 비어 있는 일자 소계·총계 ${fN(S.skipped)}행 제외)</td></tr>
     <tr><td>관리 품번 리스트</td><td>${S.master.length}개 주조 품번 · ${esc(S.masterSrc)}</td></tr>
+    <tr><td>분모 기준</td><td>${S.mon ? "생산수량(모니터링) · " + esc(S.mon.src) + " · 호기 " + S.mon.mach.length + "대" + (R.monOff ? " (구분 일부 선택 중이라 SAP 기준으로 계산)" : "") : "SAP 생산수량 (Fact Book 미등록)"}</td></tr>
+    ${R.noMon.length ? `<tr><td>모니터링수량이 없는 월</td><td>${R.noMon.map(ymLabel).join(", ")} — 수율이 계산되지 않습니다</td></tr>` : ""}
+    ${R.noMap.size ? `<tr><td>Fact Book에 없는 작업장</td><td>${[...R.noMap.entries()].map(([k, q]) => esc(k) + " (" + fN(q) + "개)").join(", ")} — 관리 리스트의 업체로 집계</td></tr>` : ""}
     <tr><td>선택 기간에 실적 없는 관리 품번</td><td>${noAct}개</td></tr>
     <tr><td>비고가 입력된 주조 실적</td><td>${fN(R.notes)}건 (입력 오류 정정 등, 수량은 그대로 합산됨)</td></tr>
     </tbody></table>
-    <div class="row sec noprint"><label class="btn">관리 품번 리스트 갱신 (양품수율 파일의 '불량수량' 시트)<input type="file" id="fMaster" accept=".xlsx,.xls" hidden></label><button id="bMasterReset">기본 리스트로 되돌리기</button></div></div>
+    <div class="row sec noprint"><label class="btn">관리 품번 리스트 갱신 (양품수율 파일의 '불량수량' 시트)<input type="file" id="fMaster" accept=".xlsx,.xls" hidden></label><button id="bMasterReset">기본 리스트로 되돌리기</button>${S.mon ? `<button id="bMonReset">모니터링수량 지우기 (SAP 기준으로)</button>` : ""}</div></div>
   <div class="card sec"><h2>관리 리스트에 없는 주조(DC) 품번</h2><div class="sub">아래 품번은 모든 집계에서 제외됩니다. 우리 팀 품번이 있으면 관리 리스트에 추가하세요.</div>${table("off", [{ k: "mat", t: "품번" }, { k: "name", t: "품명" }, N("g", "생산수량"), N("h", "양품")], off)}</div>`;
 }
 
@@ -388,7 +438,7 @@ function render() {
   R = compute();
   $("#tabs").innerHTML = TABS.map(([k, t]) => `<button class="tab ${S.tab === k ? "on" : ""}" data-tab="${k}">${t}</button>`).join("");
   $("#view").innerHTML = { sum: viewSum, yield: viewYield, part: viewPart, prod: viewProd, plan: viewPlan, chk: viewChk }[S.tab]();
-  $("#scope").textContent = `${S.ymFrom} ~ ${S.ymTo} · 관리 품번 ${S.master.length}개 기준`;
+  $("#scope").textContent = `${S.ymFrom} ~ ${S.ymTo} · 관리 품번 ${S.master.length}개 · 분모: ${R.useMon ? "모니터링수량" : "SAP 생산수량"}`;
 }
 function setupFilters() {
   const ms = months(); S.ymFrom = ms[0]; S.ymTo = ms[ms.length - 1]; S.planYm = ms[ms.length - 1];
@@ -402,15 +452,25 @@ function setupFilters() {
 function readWb(file) { return file.arrayBuffer().then(b => XLSX.read(new Uint8Array(b), { type: "array", cellFormula: false, cellHTML: false, cellText: false })); }
 function busy(on, msg) { $("#busy").style.display = on ? "flex" : "none"; if (msg) $("#busy").textContent = msg; }
 async function withBusy(msg, fn) { busy(true, msg); await new Promise(r => setTimeout(r, 30)); try { await fn(); } catch (e) { alert(e.message || e); } finally { busy(false); } }
-function openSap(file) {
+function setMon(wb, name) { const m = parseMon(wb); m.src = name; S.mon = m; try { localStorage.setItem("castMon", JSON.stringify(m)); } catch (e) {} monInfo(); }
+function monInfo() { $("#moninfo").textContent = S.mon ? `분모: 생산수량(모니터링) · ${S.mon.src}` : "분모: SAP 생산수량 (Fact Book 미등록)"; }
+function openFiles(files) { // 시트 이름으로 파일 종류를 판별
   withBusy("파일을 분석하는 중입니다…", async () => {
-    const wb = await readWb(file), p = parseSap(wb);
+    for (const file of files) { const wb = await readWb(file);
+      if (wb.Sheets["주조양품수율"]) setMon(wb, file.name);
+      else if (wb.Sheets["생산계획수립"]) { S.plan = parsePlan(wb); S.planFile = file.name; }
+      else loadSap(wb, file); }
+    if (S.rows) render();
+  });
+}
+function loadSap(wb, file) { {
+    const p = parseSap(wb);
     if (!p || !p.rows.length) throw new Error("SAP 생산실적 형식을 찾지 못했습니다. '자재', '작업장', '생산수량' 머리글이 있는 시트가 필요합니다.");
     S.rows = p.rows; S.skipped = p.skipped; S.file = file.name;
     $("#empty").hidden = true; $("#app").hidden = false; $("#bXlsx").disabled = $("#bPrint").disabled = false;
     $("#fileinfo").textContent = `${file.name} · ${fN(p.rows.length)}행`;
-    setupFilters(); render();
-  });
+    setupFilters();
+  }
 }
 function saveMaster(list, src) { S.master = list; S.masterSrc = src; try { localStorage.setItem("castMaster", JSON.stringify({ list, src })); } catch (e) {} }
 
@@ -424,12 +484,15 @@ function sheet(cols, rows, total) {
 function exportXlsx() {
   const wb = XLSX.utils.book_new(), ms = selMonths(), vs = vendors(), t = met(R.all), add = (n, ws) => XLSX.utils.book_append_sheet(wb, ws, n);
   const info = XLSX.utils.aoa_to_sheet([["주조 생산실적 분석 보고서"], ["기간", S.ymFrom + " ~ " + S.ymTo], ["구분", [...S.gu].join(", ")], ["SAP 파일", S.file], ["관리 품번", S.master.length + "개 (" + S.masterSrc + ")"],
-    ["산식", "양품수율 = (주조 양품 − 후공정 불량) ÷ 주조 생산수량 / 자공정 불량률 = 주조 불량 ÷ 주조 생산수량 / 후공정 불량률 = 후공정 불량 ÷ 주조 생산수량"]]);
+    ["분모 기준", R.useMon ? "생산수량(모니터링) · " + S.mon.src : "SAP 주조 생산수량(양품+불량)"],
+    ["산식", R.useMon ? "양품수율 = (SAP 주조 양품 − 후공정 불량) ÷ 생산수량(모니터링) / 자공정 불량률 = (생산수량(모니터링) − SAP 주조 양품) ÷ 생산수량(모니터링) / 후공정 불량률 = 후공정 불량 ÷ 생산수량(모니터링)" : "양품수율 = (주조 양품 − 후공정 불량) ÷ 주조 생산수량 / 자공정 불량률 = 주조 불량 ÷ 주조 생산수량 / 후공정 불량률 = 후공정 불량 ÷ 주조 생산수량"],
+    ["참고", "품번별·작업장별·금형별 시트는 SAP 생산수량 기준" + (R.useMon ? " (모니터링수량은 호기 단위)" : "")]]);
   info["!cols"] = [{ wch: 12 }, { wch: 90 }]; add("안내", info);
-  add("업체별", sheet([{ k: "name", t: "업체" }, ...yieldCols], vs.map(v => ({ name: vName(v), ...met(R.ven.get(v) || Z()) })).filter(r => r.g), { name: "합계", ...t }));
-  add("월별", sheet([{ k: "name", t: "월" }, ...yieldCols], ms.map(m => ({ name: m, ...met(R.ym.get(m) || Z()) })), { name: "누계", ...t }));
+  add("업체별", sheet([{ k: "name", t: "업체" }, ...yCols()], vs.map(v => ({ name: v, ...met(R.ven.get(v) || Z()) })).filter(r => r.g || r.h), { name: "합계", ...t }));
+  add("월별", sheet([{ k: "name", t: "월" }, ...yCols()], ms.map(m => ({ name: m, ...met(R.ym.get(m) || Z()) })), { name: "누계", ...t }));
   const mk = key => { const row = {}; ms.forEach(m => row[m] = met((key === "*" ? R.ym.get(m) : R.venYm.get(key + "|" + m)) || Z()).y); return row; };
-  add("업체별월별수율", sheet([{ k: "name", t: "업체" }, ...ms.map(m => P(m, m)), P("tot", "누계")], vs.map(v => ({ name: vName(v), ...mk(v), tot: met(R.ven.get(v) || Z()).y })).filter(r => r.tot != null), { name: "합계", ...mk("*"), tot: t.y }));
+  add("업체별월별수율", sheet([{ k: "name", t: "업체" }, ...ms.map(m => P(m, m)), P("tot", "누계")], vs.map(v => ({ name: v, ...mk(v), tot: met(R.ven.get(v) || Z()).y })).filter(r => r.tot != null), { name: "합계", ...mk("*"), tot: t.y }));
+  if (R.useMon) add("호기별_자공정", sheet(machCols, R.mach));
   add("품번별", sheet(partCols, partRows().sort((a, b) => b.loss - a.loss)));
   add("작업장별", sheet(wcCols, wcRows()));
   add("금형별", sheet(moldCols, moldRows().sort((a, b) => b.bad - a.bad)));
@@ -445,11 +508,12 @@ document.addEventListener("click", e => {
   else if (t.tagName === "TH") { const id = t.closest("table").dataset.id, i = +t.dataset.i, st = S.sort[id]; S.sort[id] = st && st.i === i ? { i, dir: -st.dir } : { i, dir: t.classList.contains("n") ? -1 : 1 }; render(); }
   else if (t.id === "bXlsx") exportXlsx();
   else if (t.id === "bPrint") window.print();
+  else if (t.id === "bMonReset") { S.mon = null; try { localStorage.removeItem("castMon"); } catch (x) {} monInfo(); render(); }
   else if (t.id === "bMasterReset") { try { localStorage.removeItem("castMaster"); } catch (x) {} S.master = DEFAULT_MASTER; S.masterSrc = "기본 내장(10월 양품수율 파일 '불량수량' 시트)"; setupFilters(); render(); }
 });
 document.addEventListener("change", e => {
   const t = e.target, f = t.files && t.files[0];
-  if (t.id === "fSap" && f) openSap(f);
+  if ((t.id === "fSap" || t.id === "fMon") && f) openFiles([f]);
   else if (t.id === "ymFrom" || t.id === "ymTo") { S.ymFrom = $("#ymFrom").value; S.ymTo = $("#ymTo").value; if (S.ymFrom > S.ymTo) { t.id === "ymFrom" ? S.ymTo = S.ymFrom : S.ymFrom = S.ymTo; $("#ymFrom").value = S.ymFrom; $("#ymTo").value = S.ymTo; } render(); }
   else if (t.id === "planYm") { S.planYm = t.value; render(); }
   else if (t.id === "fPlan" && f) withBusy("계획 파일을 읽는 중입니다…", async () => { S.plan = parsePlan(await readWb(f)); S.planFile = f.name; render(); });
@@ -461,9 +525,9 @@ document.addEventListener("mousemove", e => { const el = e.target.closest && e.t
 const drop = $("#drop");
 ["dragenter", "dragover"].forEach(n => document.addEventListener(n, e => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach(n => document.addEventListener(n, e => { e.preventDefault(); drop.classList.remove("over"); }));
-document.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) openSap(f); });
+document.addEventListener("drop", e => { const fs = [...e.dataTransfer.files]; if (fs.length) openFiles(fs); });
 
-loadMaster();
+loadMaster(); loadMon(); monInfo();
 $("#masterinfo").textContent = `관리 품번 리스트: ${S.master.length}개 주조 품번 · ${S.masterSrc}`;
 </script>
 </body>
