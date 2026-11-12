@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>주조 생산실적 분석</title>
+<style>
+:root{
+  --bg:#f4f4f2; --surface:#fcfcfb; --line:#e3e2dd; --line2:#efeeea;
+  --text:#0b0b0b; --text2:#52514e; --muted:#85837d;
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4;
+  --good:#0ca30c; --crit:#d03b3b; --accent:#1c5cab; --accent-bg:#e8f1fd;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 "Malgun Gothic","맑은 고딕","Apple SD Gothic Neo","Noto Sans KR",sans-serif}
+header{background:var(--surface);border-bottom:1px solid var(--line);padding:14px 24px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+h1{font-size:18px;margin:0}
+h2{font-size:15px;margin:0 0 4px}
+.sub{color:var(--text2);font-size:12px}
+main{max-width:1280px;margin:0 auto;padding:16px 24px 60px}
+button,.btn{font:inherit;border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:6px 12px;cursor:pointer;color:var(--text)}
+button:hover,.btn:hover{border-color:var(--muted)}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:disabled{opacity:.45;cursor:default}
+select,input[type=text]{font:inherit;border:1px solid var(--line);border-radius:6px;padding:5px 8px;background:#fff;color:var(--text)}
+.drop{border:2px dashed #c9c7c0;border-radius:12px;background:var(--surface);padding:56px 24px;text-align:center;margin-top:24px}
+.drop.over{border-color:var(--accent);background:var(--accent-bg)}
+.drop strong{font-size:17px}
+.filters{display:flex;gap:14px;align-items:center;flex-wrap:wrap;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 14px;margin-bottom:12px}
+.filters label{color:var(--text2);font-size:12px;margin-right:4px}
+.chip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:13px;cursor:pointer;background:#fff;user-select:none}
+.chip.on{background:var(--accent-bg);border-color:var(--accent);color:var(--accent);font-weight:600}
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:14px;flex-wrap:wrap}
+.tab{padding:8px 14px;cursor:pointer;border:0;background:none;border-bottom:2px solid transparent;border-radius:0;color:var(--text2)}
+.tab.on{border-bottom-color:var(--accent);color:var(--accent);font-weight:700}
+.grid{display:grid;gap:12px}
+.kpis{grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.two{grid-template-columns:repeat(auto-fit,minmax(440px,1fr))}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:14px 16px;min-width:0}
+.kpi .lab{color:var(--text2);font-size:12px}
+.kpi .val{font-size:26px;font-weight:700;letter-spacing:-.5px}
+.kpi .hint{color:var(--muted);font-size:12px}
+.sec{margin-top:12px}
+.tw{overflow:auto;max-height:640px;border:1px solid var(--line);border-radius:8px;margin-top:8px}
+table{border-collapse:collapse;width:100%;font-size:13px;background:#fff}
+th,td{padding:5px 9px;border-bottom:1px solid var(--line2);white-space:nowrap;text-align:left}
+th{position:sticky;top:0;background:#f1f0ec;font-weight:600;cursor:pointer;z-index:1}
+th.n,td.n{text-align:right;font-variant-numeric:tabular-nums}
+tr.tot td{font-weight:700;background:#f7f6f3;border-top:1px solid var(--line)}
+td.bad{color:var(--crit);font-weight:600} td.ok{color:#0a7a0a;font-weight:600} td.over{color:#6250d6;font-weight:600}
+.note{color:var(--text2);font-size:12px;margin-top:6px}
+.warn{background:#fff7e0;border:1px solid #f0d58a;border-radius:8px;padding:8px 12px;font-size:13px;margin-bottom:12px}
+.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text2);margin:4px 0}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+svg text{font-family:inherit;fill:var(--text2);font-size:11px}
+svg .v{fill:var(--text);font-weight:600}
+#tip{position:fixed;pointer-events:none;background:#1a1a19;color:#f0efec;border-radius:6px;padding:6px 9px;font-size:12px;line-height:1.45;z-index:9;display:none;max-width:280px}
+#busy{position:fixed;inset:0;background:rgba(255,255,255,.75);display:none;align-items:center;justify-content:center;font-size:16px;font-weight:600;z-index:20}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.sp{flex:1}
+@media print{
+  header .noprint,.tabs,.noprint,#tip{display:none!important}
+  body{background:#fff} .tw{max-height:none;overflow:visible} .card{break-inside:avoid}
+  th{position:static}
+}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>주조 생산실적 분석</h1>
+    <div class="sub" id="fileinfo">SAP 생산실적 EXPORT 파일을 불러오세요 · 데이터는 이 PC 밖으로 전송되지 않습니다</div>
+  </div>
+  <div class="sp"></div>
+  <div class="row noprint">
+    <label class="btn">SAP 파일 열기<input type="file" id="fSap" accept=".xlsx,.xls,.csv" hidden></label>
+    <button id="bXlsx" class="primary" disabled>엑셀 보고서 저장</button>
+    <button id="bPrint" disabled>인쇄</button>
+  </div>
+</header>
+<main>
+  <div id="empty">
+    <div class="drop" id="drop">
+      <strong>SAP에서 내려받은 생산실적 EXPORT 엑셀을 여기에 끌어다 놓으세요</strong>
+      <p class="sub">필요 컬럼: 실제 종료일 · 작업장 · 자재 · 자재 번호 · 양품/불량품 구분 · 생산수량 (금형 · 비고는 있으면 사용)</p>
+      <p class="sub" id="masterinfo"></p>
+    </div>
+  </div>
+  <div id="app" hidden>
+    <div class="filters noprint">
+      <div><label>기간</label><select id="ymFrom"></select> ~ <select id="ymTo"></select></div>
+      <div><label>구분</label><span id="guChips"></span></div>
+      <div class="sp"></div>
+      <div class="sub" id="scope"></div>
+    </div>
+    <div class="tabs" id="tabs"></div>
+    <div id="view"></div>
+  </div>
+</main>
+<div id="tip"></div>
+<div id="busy">파일을 분석하는 중입니다…</div>
+
+<script>/*__XLSX__*/</script>
+<script>
+"use strict";
+const DEFAULT_MASTER = /*__MASTER__*/;
+const STAGES = ["사상","가공","조립·출하"];           // 후공정 묶음
+const STAGE_OF = [0,1,1,2,2,2];                      // 관리 리스트 후공정 6열 → 묶음
+const VCOL = ["var(--s1)","var(--s2)","var(--s3)","var(--s4)","var(--s5)","#008300","#6250d6","#e34948"];
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fN = v => v == null || isNaN(v) ? "-" : Math.round(v).toLocaleString("ko-KR");
+const fP = (v, d = 2) => v == null || !isFinite(v) ? "-" : (v * 100).toFixed(d) + "%";
+const vName = v => String(v || "").replace(/^\d+/, "");
+const ymLabel = ym => ym.slice(2, 4) + "." + (+ym.slice(5)) + "월";
+
+const S = { master: null, masterSrc: "기본 내장(10월 양품수율 파일 '불량수량' 시트)", rows: null, file: "", tab: "sum",
+            ymFrom: null, ymTo: null, gu: null, plan: null, planFile: "", planYm: null, sort: {}, q: "" };
+
+/* ---------- 관리 품번 리스트 ---------- */
+function loadMaster() {
+  try { const j = localStorage.getItem("castMaster"); if (j) { const o = JSON.parse(j); if (o.list && o.list.length) { S.master = o.list; S.masterSrc = o.src; return; } } } catch (e) {}
+  S.master = DEFAULT_MASTER;
+}
+function parseMasterSheet(wb) {
+  const ws = wb.Sheets["불량수량"]; if (!ws) return null;
+  const a = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null });
+  let hr = -1, cc = -1;
+  for (let r = 0; r < Math.min(a.length, 15) && hr < 0; r++) for (let c = 0; c < (a[r] || []).length - 1; c++)
+    if (a[r][c] === "주조" && a[r][c + 1] === "사상") { hr = r; cc = c; break; }
+  if (hr < 0) return null;
+  const list = [];
+  for (let r = hr + 1; r < a.length; r++) {
+    const row = a[r] || [], cast = row[cc];
+    if (typeof cast !== "string" || !cast.trim()) continue;
+    const down = []; for (let i = 1; i <= 6; i++) { const d = row[cc + i]; down.push(typeof d === "string" && d.trim() ? d.trim() : null); }
+    list.push([row[cc - 3], row[cc - 2], row[cc - 1], cast.trim(), down, row[cc + 7]]);
+  }
+  return list.length ? list : null;
+}
+
+/* ---------- SAP EXPORT 읽기 ---------- */
+function toYmd(v) {
+  if (typeof v === "number" && v > 20000 && v < 80000) { const d = new Date(Date.UTC(1899, 11, 30) + Math.round(v) * 864e5); return [d.getUTCFullYear(), d.getUTCMonth() + 1, d.getUTCDate()]; }
+  if (v instanceof Date) return [v.getFullYear(), v.getMonth() + 1, v.getDate()];
+  const m = String(v || "").match(/(\d{4})\D?(\d{1,2})\D?(\d{1,2})/); return m ? [+m[1], +m[2], +m[3]] : null;
+}
+function parseSap(wb) {
+  for (const sn of wb.SheetNames) {
+    const a = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, raw: true, defval: "" });
+    let hr = -1;
+    for (let r = 0; r < Math.min(a.length, 20); r++) { const t = a[r].map(x => String(x).trim()); if (t.includes("자재") && t.includes("생산수량") && t.includes("작업장")) { hr = r; break; } }
+    if (hr < 0) continue;
+    const H = a[hr].map(x => String(x).trim()), ix = n => H.indexOf(n);
+    const need = ["실제 종료일", "작업장", "자재", "양품/불량품 구분", "생산수량"], miss = need.filter(n => ix(n) < 0);
+    if (miss.length) throw new Error("필수 컬럼이 없습니다: " + miss.join(", "));
+    const cD = ix("실제 종료일"), cW = ix("작업장"), cM = ix("자재"), cN = ix("자재 번호"), cG = ix("양품/불량품 구분"), cQ = ix("생산수량"), cO = ix("금형"), cR = ix("비고");
+    const rows = []; let skipped = 0;
+    for (let r = hr + 1; r < a.length; r++) {
+      const x = a[r], mat = String(x[cM] ?? "").trim();
+      if (!mat) { skipped++; continue; }                       // 일자 소계·총계 행 제외
+      const d = toYmd(x[cD]), q = +x[cQ]; if (!d || !isFinite(q)) { skipped++; continue; }
+      const g = String(x[cG]).trim();
+      rows.push({ ym: d[0] + "-" + String(d[1]).padStart(2, "0"), day: d[0] * 1e4 + d[1] * 100 + d[2], wc: String(x[cW]).trim(), mat,
+                  name: cN < 0 ? "" : String(x[cN]).trim(), good: g === "양품", bad: g === "불량", q, mold: cO < 0 ? "" : String(x[cO]).trim(), note: cR < 0 ? "" : String(x[cR]).trim() });
+    }
+    return { rows, skipped, sheet: sn };
+  }
+  return null;
+}
+
+/* ---------- 집계 ---------- */
+const Z = () => ({ g: 0, h: 0, d: 0, s: [0, 0, 0] });
+const add = (m, k) => m.get(k) || (m.set(k, Z()), m.get(k));
+function met(o) { const g = o.g; return { g, h: o.h, bad: g - o.h, d: o.d, s: o.s, i: o.h - o.d, own: g ? (g - o.h) / g : null, post: g ? o.d / g : null, y: g ? (o.h - o.d) / g : null }; }
+
+function compute() {
+  const M = S.master, cast = new Map(), down = new Map();
+  M.forEach((e, i) => { cast.set(e[3], i); e[4].forEach((d, j) => { if (d && !down.has(d)) down.set(d, [i, j]); }); });
+  const inP = r => r.ym >= S.ymFrom && r.ym <= S.ymTo, inG = i => S.gu.has(String(M[i][0]));
+  const R = { all: Z(), ym: new Map(), ven: new Map(), venYm: new Map(), eq: new Map(), ent: new Map(), wc: new Map(), mold: new Map(), day: new Map(), off: new Map(), days: new Set(), notes: 0 };
+  for (const r of S.rows) {
+    if (!inP(r)) continue;
+    const ci = cast.get(r.mat);
+    if (ci != null && (r.good || r.bad)) {
+      if (!inG(ci)) continue;
+      const e = M[ci], h = r.good ? r.q : 0;
+      for (const o of [R.all, add(R.ym, r.ym), add(R.ven, e[1]), add(R.venYm, e[1] + "|" + r.ym), add(R.eq, e[1] + "|" + e[2]), add(R.ent, ci)]) { o.g += r.q; o.h += h; }
+      let w = R.wc.get(r.wc); if (!w) R.wc.set(r.wc, w = { g: 0, h: 0, days: new Set(), ven: new Map(), parts: new Set() });
+      w.g += r.q; w.h += h; if (r.q > 0) w.days.add(r.day); w.parts.add(r.mat); w.ven.set(e[1], (w.ven.get(e[1]) || 0) + r.q);
+      const mk = r.mold + "|" + r.mat; let mo = R.mold.get(mk); if (!mo) R.mold.set(mk, mo = { mold: r.mold, ci, g: 0, h: 0 });
+      mo.g += r.q; mo.h += h;
+      let dd = R.day.get(r.day); if (!dd) R.day.set(r.day, dd = { g: 0, h: 0 }); dd.g += r.q; dd.h += h; if (r.q > 0) R.days.add(r.day);
+      if (r.note) R.notes++;
+      continue;
+    }
+    const di = down.get(r.mat);
+    if (di && r.bad) {
+      if (!inG(di[0])) continue;
+      const e = M[di[0]], st = STAGE_OF[di[1]];
+      for (const o of [R.all, add(R.ym, r.ym), add(R.ven, e[1]), add(R.venYm, e[1] + "|" + r.ym), add(R.eq, e[1] + "|" + e[2]), add(R.ent, di[0])]) { o.d += r.q; o.s[st] += r.q; }
+      continue;
+    }
+    if (r.wc.startsWith("DC") && (r.good || r.bad)) { let o = R.off.get(r.mat); if (!o) R.off.set(r.mat, o = { name: r.name, g: 0, h: 0 }); o.g += r.q; if (r.good) o.h += r.q; }
+  }
+  return R;
+}
+
+/* ---------- 표 ---------- */
+function table(id, cols, rows, total) {
+  const st = S.sort[id]; let rs = rows.slice();
+  if (st) { const c = cols[st.i], k = c.s || c.k; rs.sort((a, b) => { const x = a[k], y = b[k]; const r = (x == null) - (y == null) || (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "ko")); return st.dir * r; }); }
+  const cell = (c, r) => `<td class="${c.n ? "n " : ""}${c.cls ? c.cls(r) : ""}">${c.f ? c.f(r[c.k], r) : esc(r[c.k])}</td>`;
+  return `<div class="tw"><table data-id="${id}"><thead><tr>${cols.map((c, i) => `<th class="${c.n ? "n" : ""}" data-i="${i}">${esc(c.t)}${st && st.i === i ? (st.dir > 0 ? " ▲" : " ▼") : ""}</th>`).join("")}</tr></thead><tbody>` +
+    rs.map(r => `<tr>${cols.map(c => cell(c, r)).join("")}</tr>`).join("") +
+    (total ? `<tr class="tot">${cols.map(c => cell(c, total)).join("")}</tr>` : "") + `</tbody></table></div>`;
+}
+const N = (k, t) => ({ k, t, n: 1, f: fN }), P = (k, t, d) => ({ k, t, n: 1, p: 1, f: v => fP(v, d) });
+const yieldCols = [N("g", "주조 생산수량"), N("h", "양품수량"), N("bad", "자공정 불량"), N("d", "후공정 불량"), N("i", "최종 양품"), P("own", "자공정 불량률"), P("post", "후공정 불량률"), P("y", "양품수율")];
+
+/* ---------- 차트 (SVG) ---------- */
+function tipAttr(html) { return `data-tip="${esc(html)}"`; }
+function lineChart(cats, series, o = {}) {
+  const W = 620, Hh = 250, L = 46, Rr = o.endLabels ? 64 : 16, T = 14, B = 26, pw = W - L - Rr, ph = Hh - T - B;
+  const vals = series.flatMap(s => s.v.filter(v => v != null)); if (!vals.length) return `<div class="note">표시할 데이터가 없습니다.</div>`;
+  let lo = Math.floor(Math.min(...vals) * 100 - 1) / 100, hi = Math.min(1, Math.ceil(Math.max(...vals) * 100 + 1) / 100);
+  const x = i => L + (cats.length === 1 ? pw / 2 : pw * i / (cats.length - 1)), y = v => T + ph * (1 - (v - lo) / (hi - lo));
+  let g = ""; const step = (hi - lo) > 0.08 ? 0.02 : 0.01;
+  for (let t = lo; t <= hi + 1e-9; t += step) g += `<line x1="${L}" x2="${W - Rr}" y1="${y(t)}" y2="${y(t)}" stroke="#eceae5"/><text x="${L - 6}" y="${y(t) + 4}" text-anchor="end">${(t * 100).toFixed(0)}%</text>`;
+  cats.forEach((c, i) => g += `<text x="${x(i)}" y="${Hh - 8}" text-anchor="middle">${esc(c)}</text>`);
+  series.forEach(s => {
+    const pts = s.v.map((v, i) => v == null ? null : [x(i), y(v)]).filter(Boolean);
+    g += `<path d="M${pts.map(p => p.join(",")).join("L")}" fill="none" stroke="${s.c}" stroke-width="2" stroke-linejoin="round"/>`;
+    s.v.forEach((v, i) => { if (v != null) g += `<circle cx="${x(i)}" cy="${y(v)}" r="4" fill="${s.c}" stroke="#fcfcfb" stroke-width="2"/><circle cx="${x(i)}" cy="${y(v)}" r="11" fill="transparent" ${tipAttr(`<b>${s.name}</b> · ${cats[i]}<br>${o.label || "양품수율"} ${fP(v)}`)}/>`; });
+    const li = s.v.length - 1 - [...s.v].reverse().findIndex(v => v != null);
+    if (o.endLabels && s.v[li] != null) g += `<text class="v" x="${x(li) + 8}" y="${y(s.v[li]) + 4}">${fP(s.v[li], 1)}</text>`;
+  });
+  return `<svg viewBox="0 0 ${W} ${Hh}" width="100%" role="img">${g}</svg>`;
+}
+function barChart(cats, vals, tips) {
+  const W = 620, Hh = 250, L = 56, Rr = 12, T = 18, B = 26, pw = W - L - Rr, ph = Hh - T - B, mx = Math.max(...vals, 1);
+  const raw = mx / 4, p10 = Math.pow(10, Math.floor(Math.log10(raw))), stp = [1, 2, 2.5, 5, 10].find(k => k * p10 >= raw) * p10, top = stp * Math.ceil(mx / stp), nt = Math.round(top / stp), bw = Math.min(40, pw / cats.length * 0.6);
+  let g = ""; for (let k = 0; k <= nt; k++) { const v = stp * k, yy = T + ph * (1 - k / nt); g += `<line x1="${L}" x2="${W - Rr}" y1="${yy}" y2="${yy}" stroke="#eceae5"/><text x="${L - 6}" y="${yy + 4}" text-anchor="end">${v >= 1e4 ? fN(v / 1e4) + "만" : fN(v)}</text>`; }
+  cats.forEach((c, i) => { const cx = L + pw * (i + .5) / cats.length, h = Math.max(0, ph * vals[i] / top), yy = T + ph - h;
+    g += `<path d="M${cx - bw / 2},${T + ph}V${yy + 4}q0,-4 4,-4h${bw - 8}q4,0 4,4V${T + ph}z" fill="var(--s1)" ${tipAttr(tips[i])}/><text x="${cx}" y="${Hh - 8}" text-anchor="middle">${esc(c)}</text>`; });
+  return `<svg viewBox="0 0 ${W} ${Hh}" width="100%" role="img">${g}</svg>`;
+}
+function stackH(items) { // 업체별 불량률 구성: 자공정 + 후공정
+  const W = 620, rowH = 34, L = 92, Rr = 70, pw = W - L - Rr, mx = Math.max(...items.map(t => (t.own || 0) + (t.post || 0)), .01);
+  let g = ""; items.forEach((t, i) => { const yy = 8 + i * rowH, a = pw * (t.own || 0) / mx, b = pw * (t.post || 0) / mx;
+    g += `<text x="${L - 8}" y="${yy + 15}" text-anchor="end" class="v">${esc(t.name)}</text>
+      <rect x="${L}" y="${yy}" width="${Math.max(0, a - 1)}" height="20" rx="3" fill="var(--s1)" ${tipAttr(`<b>${t.name}</b><br>자공정 불량률 ${fP(t.own)} (${fN(t.bad)}개)`)}/>
+      <rect x="${L + a + 1}" y="${yy}" width="${Math.max(0, b - 1)}" height="20" rx="3" fill="var(--s2)" ${tipAttr(`<b>${t.name}</b><br>후공정 불량률 ${fP(t.post)} (${fN(t.d)}개)`)}/>
+      <text x="${L + a + b + 8}" y="${yy + 15}" class="v">${fP((t.own || 0) + (t.post || 0))}</text>`; });
+  return `<svg viewBox="0 0 ${W} ${items.length * rowH + 12}" width="100%" role="img">${g}</svg>`;
+}
+
+/* ---------- 화면 ---------- */
+const TABS = [["sum", "요약"], ["yield", "양품수율"], ["part", "품번별"], ["prod", "생산성"], ["plan", "목표 대비 실적"], ["chk", "데이터 점검"]];
+let R = null;
+function months() { return [...new Set(S.rows.map(r => r.ym))].sort(); }
+function selMonths() { return months().filter(m => m >= S.ymFrom && m <= S.ymTo); }
+function vendors() { return [...new Set(S.master.map(e => e[1]))].sort(); }
+
+function viewSum() {
+  const t = met(R.all), ms = selMonths(), nd = R.days.size;
+  const k = (lab, val, hint) => `<div class="card kpi"><div class="lab">${lab}</div><div class="val">${val}</div><div class="hint">${hint || ""}</div></div>`;
+  const ven = vendors().map(v => ({ name: vName(v), ...met(R.ven.get(v) || Z()) })).filter(v => v.g);
+  return `<div class="grid kpis">
+    ${k("양품수율", fP(t.y), "최종 양품 ÷ 주조 생산수량")}
+    ${k("자공정 불량률", fP(t.own), "주조 불량 " + fN(t.bad) + "개")}
+    ${k("후공정 불량률", fP(t.post), "사상·가공·조립 불량 " + fN(t.d) + "개")}
+    ${k("주조 생산수량", fN(t.g), "양품 " + fN(t.h) + "개")}
+    ${k("일평균 생산수량", fN(nd ? t.g / nd : null), "실적 등록일 " + nd + "일 기준")}
+  </div>
+  <div class="grid two sec">
+    <div class="card"><h2>월별 양품수율</h2><div class="sub">관리 품번 전체</div>${lineChart(ms.map(ymLabel), [{ name: "전체", c: "var(--s1)", v: ms.map(m => met(R.ym.get(m) || Z()).y) }], { endLabels: 1 })}</div>
+    <div class="card"><h2>월별 주조 생산수량</h2><div class="sub">양품 + 불량, 개</div>${barChart(ms.map(ymLabel), ms.map(m => (R.ym.get(m) || Z()).g), ms.map(m => { const x = met(R.ym.get(m) || Z()); return `<b>${ymLabel(m)}</b><br>생산 ${fN(x.g)}개<br>양품 ${fN(x.h)}개`; }))}</div>
+    <div class="card"><h2>업체별 월별 양품수율</h2><div class="legend">${ven.map((v, i) => `<span><i style="background:${VCOL[i]}"></i>${esc(v.name)}</span>`).join("")}</div>${lineChart(ms.map(ymLabel), vendors().filter(v => (R.ven.get(v) || Z()).g).map((v, i) => ({ name: vName(v), c: VCOL[i], v: ms.map(m => met(R.venYm.get(v + "|" + m) || Z()).y) })))}</div>
+    <div class="card"><h2>업체별 불량률 구성</h2><div class="legend"><span><i style="background:var(--s1)"></i>자공정(주조) 불량률</span><span><i style="background:var(--s2)"></i>후공정 불량률</span></div>${stackH(ven)}</div>
+  </div>
+  <div class="card sec"><h2>업체별 실적</h2>${table("sumVen", [{ k: "name", t: "업체" }, ...yieldCols], ven, { name: "합계", ...t })}
+  <div class="note">양품수율 = (주조 양품 − 후공정 불량) ÷ 주조 생산수량 · 후공정 불량은 관리 리스트의 사상·가공·조립/출하 품번에 등록된 불량수량을 주조 품번으로 귀속</div></div>`;
+}
+function viewYield() {
+  const ms = selMonths(), vs = vendors();
+  const mk = key => { const row = {}; ms.forEach(m => row[m] = met((key === "*" ? R.ym.get(m) : R.venYm.get(key + "|" + m)) || Z()).y); return row; };
+  const rows = vs.map(v => ({ name: vName(v), ...mk(v), tot: met(R.ven.get(v) || Z()).y })).filter(r => r.tot != null);
+  const cols = [{ k: "name", t: "업체" }, ...ms.map(m => P(m, ymLabel(m))), P("tot", "누계")];
+  const mrows = ms.map(m => ({ name: ymLabel(m), ...met(R.ym.get(m) || Z()) }));
+  const eq = [...R.eq.entries()].map(([k, o]) => { const [v, e] = k.split("|"); return { ven: vName(v), eq: e, sk: k, ...met(o) }; }).filter(r => r.g || r.d).sort((a, b) => a.sk.localeCompare(b.sk, "ko"));
+  return `<div class="card"><h2>업체별 월별 양품수율</h2>${table("yVenYm", cols, rows, { name: "합계", ...mk("*"), tot: met(R.all).y })}</div>
+  <div class="card sec"><h2>월별 실적</h2>${table("yYm", [{ k: "name", t: "월" }, ...yieldCols], mrows, { name: "누계", ...met(R.all) })}</div>
+  <div class="card sec"><h2>업체 · 설비(톤수)별 실적</h2>${table("yEq", [{ k: "ven", t: "업체" }, { k: "eq", t: "설비" }, ...yieldCols], eq)}</div>`;
+}
+function partRows() {
+  return S.master.map((e, i) => { const o = R.ent.get(i); if (!o) return null; const m = met(o);
+    return { mat: e[3], name: e[5] || "", gu: e[0], ven: vName(e[1]), eq: e[2], ...m, s0: o.s[0], s1: o.s[1], s2: o.s[2], loss: m.bad + m.d }; }).filter(Boolean);
+}
+const partCols = [{ k: "mat", t: "품번" }, { k: "name", t: "품명" }, { k: "gu", t: "구분" }, { k: "ven", t: "업체" }, { k: "eq", t: "설비" }, N("g", "생산수량"), N("h", "양품"), N("bad", "자공정 불량"), N("s0", "사상 불량"), N("s1", "가공 불량"), N("s2", "조립·출하 불량"), N("loss", "불량 합계"), P("own", "자공정 불량률"), P("post", "후공정 불량률"), P("y", "양품수율")];
+function viewPart() {
+  let rows = partRows(); const q = S.q.trim().toLowerCase();
+  if (q) rows = rows.filter(r => (r.mat + " " + r.name + " " + r.ven + " " + r.eq).toLowerCase().includes(q));
+  if (!S.sort.part) S.sort.part = { i: 11, dir: -1 };
+  return `<div class="card"><div class="row"><h2>품번별 실적</h2><div class="sp"></div><input type="text" id="q" class="noprint" placeholder="품번 · 품명 · 업체 검색" value="${esc(S.q)}" style="width:240px"></div>
+  <div class="sub">${rows.length}개 품번 · 열 제목을 누르면 정렬됩니다 (기본: 불량 합계 많은 순)</div>${table("part", partCols, rows)}</div>`;
+}
+function wcRows() {
+  return [...R.wc.entries()].map(([wc, w]) => { const top = [...w.ven.entries()].sort((a, b) => b[1] - a[1])[0];
+    return { wc, ven: vName(top[0]), days: w.days.size, parts: w.parts.size, g: w.g, h: w.h, bad: w.g - w.h, avg: w.days.size ? w.g / w.days.size : null, own: w.g ? (w.g - w.h) / w.g : null }; }).filter(r => r.g > 0).sort((a, b) => a.wc.localeCompare(b.wc));
+}
+function moldRows() {
+  return [...R.mold.values()].map(m => { const e = S.master[m.ci]; return { mold: m.mold || "(미입력)", mat: e[3], name: e[5] || "", ven: vName(e[1]), g: m.g, h: m.h, bad: m.g - m.h, own: m.g ? (m.g - m.h) / m.g : null }; });
+}
+const wcCols = [{ k: "wc", t: "작업장(호기)" }, { k: "ven", t: "주 생산 업체" }, N("days", "가동일수"), N("parts", "생산 품번 수"), N("g", "생산수량"), N("h", "양품"), N("bad", "자공정 불량"), N("avg", "일평균 생산수량"), P("own", "자공정 불량률")];
+const moldCols = [{ k: "mold", t: "금형" }, { k: "mat", t: "품번" }, { k: "name", t: "품명" }, { k: "ven", t: "업체" }, N("g", "생산수량"), N("h", "양품"), N("bad", "자공정 불량"), P("own", "자공정 불량률")];
+function viewProd() {
+  const w = wcRows(), t = met(R.all), nd = R.days.size; if (!S.sort.mold) S.sort.mold = { i: 6, dir: -1 };
+  const wd = w.reduce((a, r) => a + r.days, 0);
+  const k = (lab, val, hint) => `<div class="card kpi"><div class="lab">${lab}</div><div class="val">${val}</div><div class="hint">${hint || ""}</div></div>`;
+  return `<div class="warn">SAP EXPORT에는 가동시간·사이클타임·작업인원 정보가 없어 시간당 생산량(UPH)·인당 생산성은 계산할 수 없습니다. 여기서는 <b>호기별 가동일수와 일평균 생산수량</b>을 생산성 지표로 사용합니다.</div>
+  <div class="grid kpis">
+    ${k("가동 호기 수", w.length + "대", "기간 중 실적이 등록된 작업장")}
+    ${k("호기·일당 평균 생산수량", fN(wd ? t.g / wd : null), "생산수량 ÷ 호기별 가동일수 합계")}
+    ${k("호기당 평균 가동일수", w.length ? (wd / w.length).toFixed(1) + "일" : "-", "실적 등록일 " + nd + "일 중")}
+    ${k("일평균 생산수량", fN(nd ? t.g / nd : null), "전체 호기 합계")}
+  </div>
+  <div class="card sec"><h2>작업장(호기)별 생산성</h2><div class="sub">가동일수 = 해당 호기에 실적이 등록된 날짜 수</div>${table("wc", wcCols, w)}</div>
+  <div class="card sec"><h2>금형별 자공정 불량</h2><div class="sub">기본: 자공정 불량수량 많은 순</div>${table("mold", moldCols, moldRows())}</div>`;
+}
+
+/* ---------- 목표 대비 실적 ---------- */
+function parsePlan(wb) {
+  const ws = wb.Sheets["생산계획수립"]; if (!ws) throw new Error("'생산계획수립' 시트를 찾지 못했습니다.");
+  const rg = XLSX.utils.decode_range(ws["!ref"] || "A1"); rg.s.r = 0; rg.s.c = 0;   // 빈 A열·빈 첫 행이 있어도 C열 = 인덱스 2 유지
+  const a = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: null, range: rg });
+  let hr = -1; for (let r = 0; r < Math.min(a.length, 30); r++) if (String((a[r] || [])[2] ?? "").trim() === "품번") { hr = r; break; }
+  if (hr < 0) throw new Error("C열에서 '품번' 머리글 행을 찾지 못했습니다.");
+  const tc = (a[hr] || []).findIndex(v => String(v ?? "").includes("주조팀")); if (tc < 0) throw new Error("머리글 행에서 '주조팀' 목표 열을 찾지 못했습니다.");
+  const items = new Map();
+  for (let r = hr + 1; r < a.length; r++) { const x = a[r] || []; if (x[1] == null && x[2] == null && x[3] == null) break; if (x[2] == null) continue;
+    const mat = String(x[2]).trim(), t = typeof x[tc] === "number" ? x[tc] : 0, o = items.get(mat);
+    if (o) o.t += t; else items.set(mat, { mat, name: String(x[3] ?? "").trim(), gu: x[1] ?? "", t }); }
+  if (!items.size) throw new Error("계획 품번을 한 건도 읽지 못했습니다.");
+  return { items: [...items.values()], head: String(a[hr][tc]) };
+}
+function planRows() {
+  const act = new Map(), nm = new Map(), mset = new Set(S.master.map(e => e[3]));
+  for (const r of S.rows) if (r.ym === S.planYm && r.good && r.wc.startsWith("DC")) { act.set(r.mat, (act.get(r.mat) || 0) + r.q); nm.set(r.mat, r.name); }
+  const jd = (t, a) => t <= 0 ? (a > 0 ? "계획외" : "") : a / t < .95 ? "미달" : a / t > 1.05 ? "초과" : "달성";
+  const rows = [], seen = new Set();
+  for (const p of S.plan.items) { seen.add(p.mat); const a = act.get(p.mat) || 0; if (p.t <= 0 && a <= 0) continue; rows.push({ mat: p.mat, name: p.name || nm.get(p.mat) || "", gu: p.gu, t: p.t, a, diff: a - p.t, rate: p.t > 0 ? a / p.t : null, j: jd(p.t, a) }); }
+  for (const [mat, a] of act) if (!seen.has(mat) && mset.has(mat) && a > 0) rows.push({ mat, name: nm.get(mat), gu: "계획없음", t: 0, a, diff: a, rate: null, j: "계획외" });
+  return rows;
+}
+const planCols = [{ k: "mat", t: "품번" }, { k: "name", t: "품명" }, { k: "gu", t: "구분" }, N("t", "목표"), N("a", "실적(양품)"), N("diff", "차이"), P("rate", "달성률", 1), { k: "j", t: "판정", cls: r => r.j === "미달" ? "bad" : r.j === "달성" ? "ok" : "over" }];
+function viewPlan() {
+  const ms = months(), up = `<label class="btn noprint">주조생산계획수립 파일 열기<input type="file" id="fPlan" accept=".xlsx,.xls" hidden></label>`;
+  if (!S.plan) return `<div class="card"><h2>목표 대비 실적</h2><p>생산목표는 SAP EXPORT에 들어 있지 않습니다. <b>'주조생산계획수립' 엑셀</b>을 불러오면 품번별 목표('생산계획수립' 시트의 주조팀 목표 열)와 SAP 양품 실적을 비교합니다.</p>${up}
+    <div class="note">판정 기준: 달성률 95% 미만 = 미달 · 95~105% = 달성 · 105% 초과 = 초과 · 목표 없이 실적만 있으면 계획외</div></div>`;
+  const rows = planRows(), T = rows.reduce((s, r) => s + r.t, 0), A = rows.reduce((s, r) => s + r.a, 0);
+  const cnt = j => rows.filter(r => r.j === j), k = (lab, val, hint) => `<div class="card kpi"><div class="lab">${lab}</div><div class="val">${val}</div><div class="hint">${hint || ""}</div></div>`;
+  if (!S.sort.plan) S.sort.plan = { i: 5, dir: 1 };
+  return `<div class="filters noprint"><div><label>실적 월</label><select id="planYm">${ms.map(m => `<option ${m === S.planYm ? "selected" : ""}>${m}</option>`).join("")}</select></div><div class="sub">계획 파일: ${esc(S.planFile)} · 목표 열: ${esc(S.plan.head)}</div><div class="sp"></div>${up}</div>
+  <div class="warn">계획 파일의 목표 월과 위에서 고른 실적 월이 같은지 확인하세요. 계획 파일에는 월 정보가 따로 검증되지 않습니다.</div>
+  <div class="grid kpis">${k("달성률", fP(T ? A / T : null, 1), ymLabel(S.planYm) + " 양품 실적 ÷ 목표")}${k("목표", fN(T))}${k("실적(양품)", fN(A), "차이 " + (A - T >= 0 ? "+" : "") + fN(A - T))}
+  ${k("달성 / 미달 / 초과", cnt("달성").length + " / " + cnt("미달").length + " / " + cnt("초과").length, "계획외 " + cnt("계획외").length + "건")}</div>
+  <div class="card sec"><h2>품번별 목표 대비 실적</h2><div class="sub">기본: 미달 수량 큰 순 · 계획외는 관리 리스트 품번만 표시</div>${table("plan", planCols, rows, { mat: "합계", name: "", gu: "", t: T, a: A, diff: A - T, rate: T ? A / T : null, j: "" })}</div>`;
+}
+function viewChk() {
+  const ms = months(), off = [...R.off.entries()].map(([mat, o]) => ({ mat, name: o.name, g: o.g, h: o.h })).sort((a, b) => b.g - a.g);
+  const noAct = S.master.filter((e, i) => !R.ent.get(i)).length;
+  return `<div class="card"><h2>불러온 데이터</h2>
+    <table style="width:auto"><tbody>
+    <tr><td>SAP 파일</td><td>${esc(S.file)}</td></tr>
+    <tr><td>데이터 기간</td><td>${ms[0]} ~ ${ms[ms.length - 1]} (${ms.length}개월)</td></tr>
+    <tr><td>실적 행 수</td><td>${fN(S.rows.length)}행 (자재가 비어 있는 일자 소계·총계 ${fN(S.skipped)}행 제외)</td></tr>
+    <tr><td>관리 품번 리스트</td><td>${S.master.length}개 주조 품번 · ${esc(S.masterSrc)}</td></tr>
+    <tr><td>선택 기간에 실적 없는 관리 품번</td><td>${noAct}개</td></tr>
+    <tr><td>비고가 입력된 주조 실적</td><td>${fN(R.notes)}건 (입력 오류 정정 등, 수량은 그대로 합산됨)</td></tr>
+    </tbody></table>
+    <div class="row sec noprint"><label class="btn">관리 품번 리스트 갱신 (양품수율 파일의 '불량수량' 시트)<input type="file" id="fMaster" accept=".xlsx,.xls" hidden></label><button id="bMasterReset">기본 리스트로 되돌리기</button></div></div>
+  <div class="card sec"><h2>관리 리스트에 없는 주조(DC) 품번</h2><div class="sub">아래 품번은 모든 집계에서 제외됩니다. 우리 팀 품번이 있으면 관리 리스트에 추가하세요.</div>${table("off", [{ k: "mat", t: "품번" }, { k: "name", t: "품명" }, N("g", "생산수량"), N("h", "양품")], off)}</div>`;
+}
+
+function render() {
+  if (!S.rows) return;
+  R = compute();
+  $("#tabs").innerHTML = TABS.map(([k, t]) => `<button class="tab ${S.tab === k ? "on" : ""}" data-tab="${k}">${t}</button>`).join("");
+  $("#view").innerHTML = { sum: viewSum, yield: viewYield, part: viewPart, prod: viewProd, plan: viewPlan, chk: viewChk }[S.tab]();
+  $("#scope").textContent = `${S.ymFrom} ~ ${S.ymTo} · 관리 품번 ${S.master.length}개 기준`;
+}
+function setupFilters() {
+  const ms = months(); S.ymFrom = ms[0]; S.ymTo = ms[ms.length - 1]; S.planYm = ms[ms.length - 1];
+  const opt = sel => ms.map(m => `<option ${m === sel ? "selected" : ""}>${m}</option>`).join("");
+  $("#ymFrom").innerHTML = opt(S.ymFrom); $("#ymTo").innerHTML = opt(S.ymTo);
+  const gus = [...new Set(S.master.map(e => String(e[0])))]; S.gu = new Set(gus);
+  $("#guChips").innerHTML = gus.map(g => `<span class="chip on" data-gu="${esc(g)}">${esc(g)}</span> `).join("");
+}
+
+/* ---------- 파일 처리 ---------- */
+function readWb(file) { return file.arrayBuffer().then(b => XLSX.read(new Uint8Array(b), { type: "array", cellFormula: false, cellHTML: false, cellText: false })); }
+function busy(on, msg) { $("#busy").style.display = on ? "flex" : "none"; if (msg) $("#busy").textContent = msg; }
+async function withBusy(msg, fn) { busy(true, msg); await new Promise(r => setTimeout(r, 30)); try { await fn(); } catch (e) { alert(e.message || e); } finally { busy(false); } }
+function openSap(file) {
+  withBusy("파일을 분석하는 중입니다…", async () => {
+    const wb = await readWb(file), p = parseSap(wb);
+    if (!p || !p.rows.length) throw new Error("SAP 생산실적 형식을 찾지 못했습니다. '자재', '작업장', '생산수량' 머리글이 있는 시트가 필요합니다.");
+    S.rows = p.rows; S.skipped = p.skipped; S.file = file.name;
+    $("#empty").hidden = true; $("#app").hidden = false; $("#bXlsx").disabled = $("#bPrint").disabled = false;
+    $("#fileinfo").textContent = `${file.name} · ${fN(p.rows.length)}행`;
+    setupFilters(); render();
+  });
+}
+function saveMaster(list, src) { S.master = list; S.masterSrc = src; try { localStorage.setItem("castMaster", JSON.stringify({ list, src })); } catch (e) {} }
+
+/* ---------- 엑셀 보고서 ---------- */
+function sheet(cols, rows, total) {
+  const aoa = [cols.map(c => c.t), ...[...rows, ...(total ? [total] : [])].map(r => cols.map(c => r[c.k] ?? ""))], ws = XLSX.utils.aoa_to_sheet(aoa);
+  cols.forEach((c, ci) => { const pct = !!c.p; for (let r = 1; r < aoa.length; r++) { const cell = ws[XLSX.utils.encode_cell({ r, c: ci })]; if (cell && cell.t === "n") cell.z = pct ? "0.00%" : "#,##0"; } });
+  ws["!cols"] = cols.map(c => ({ wch: c.k === "name" ? 40 : c.n ? 13 : 18 }));
+  return ws;
+}
+function exportXlsx() {
+  const wb = XLSX.utils.book_new(), ms = selMonths(), vs = vendors(), t = met(R.all), add = (n, ws) => XLSX.utils.book_append_sheet(wb, ws, n);
+  const info = XLSX.utils.aoa_to_sheet([["주조 생산실적 분석 보고서"], ["기간", S.ymFrom + " ~ " + S.ymTo], ["구분", [...S.gu].join(", ")], ["SAP 파일", S.file], ["관리 품번", S.master.length + "개 (" + S.masterSrc + ")"],
+    ["산식", "양품수율 = (주조 양품 − 후공정 불량) ÷ 주조 생산수량 / 자공정 불량률 = 주조 불량 ÷ 주조 생산수량 / 후공정 불량률 = 후공정 불량 ÷ 주조 생산수량"]]);
+  info["!cols"] = [{ wch: 12 }, { wch: 90 }]; add("안내", info);
+  add("업체별", sheet([{ k: "name", t: "업체" }, ...yieldCols], vs.map(v => ({ name: vName(v), ...met(R.ven.get(v) || Z()) })).filter(r => r.g), { name: "합계", ...t }));
+  add("월별", sheet([{ k: "name", t: "월" }, ...yieldCols], ms.map(m => ({ name: m, ...met(R.ym.get(m) || Z()) })), { name: "누계", ...t }));
+  const mk = key => { const row = {}; ms.forEach(m => row[m] = met((key === "*" ? R.ym.get(m) : R.venYm.get(key + "|" + m)) || Z()).y); return row; };
+  add("업체별월별수율", sheet([{ k: "name", t: "업체" }, ...ms.map(m => P(m, m)), P("tot", "누계")], vs.map(v => ({ name: vName(v), ...mk(v), tot: met(R.ven.get(v) || Z()).y })).filter(r => r.tot != null), { name: "합계", ...mk("*"), tot: t.y }));
+  add("품번별", sheet(partCols, partRows().sort((a, b) => b.loss - a.loss)));
+  add("작업장별", sheet(wcCols, wcRows()));
+  add("금형별", sheet(moldCols, moldRows().sort((a, b) => b.bad - a.bad)));
+  if (S.plan) add("목표대비_" + S.planYm, sheet(planCols, planRows().sort((a, b) => a.diff - b.diff)));
+  XLSX.writeFile(wb, `casting_report_${S.ymFrom}_${S.ymTo}.xlsx`);   // 한글 파일명은 일부 브라우저에서 깨져 영문 사용
+}
+
+/* ---------- 이벤트 ---------- */
+document.addEventListener("click", e => {
+  const t = e.target;
+  if (t.dataset.tab) { S.tab = t.dataset.tab; render(); }
+  else if (t.dataset.gu != null) { const g = t.dataset.gu; S.gu.has(g) ? S.gu.delete(g) : S.gu.add(g); t.classList.toggle("on"); render(); }
+  else if (t.tagName === "TH") { const id = t.closest("table").dataset.id, i = +t.dataset.i, st = S.sort[id]; S.sort[id] = st && st.i === i ? { i, dir: -st.dir } : { i, dir: t.classList.contains("n") ? -1 : 1 }; render(); }
+  else if (t.id === "bXlsx") exportXlsx();
+  else if (t.id === "bPrint") window.print();
+  else if (t.id === "bMasterReset") { try { localStorage.removeItem("castMaster"); } catch (x) {} S.master = DEFAULT_MASTER; S.masterSrc = "기본 내장(10월 양품수율 파일 '불량수량' 시트)"; setupFilters(); render(); }
+});
+document.addEventListener("change", e => {
+  const t = e.target, f = t.files && t.files[0];
+  if (t.id === "fSap" && f) openSap(f);
+  else if (t.id === "ymFrom" || t.id === "ymTo") { S.ymFrom = $("#ymFrom").value; S.ymTo = $("#ymTo").value; if (S.ymFrom > S.ymTo) { t.id === "ymFrom" ? S.ymTo = S.ymFrom : S.ymFrom = S.ymTo; $("#ymFrom").value = S.ymFrom; $("#ymTo").value = S.ymTo; } render(); }
+  else if (t.id === "planYm") { S.planYm = t.value; render(); }
+  else if (t.id === "fPlan" && f) withBusy("계획 파일을 읽는 중입니다…", async () => { S.plan = parsePlan(await readWb(f)); S.planFile = f.name; render(); });
+  else if (t.id === "fMaster" && f) withBusy("관리 품번 리스트를 읽는 중입니다…", async () => { const l = parseMasterSheet(await readWb(f)); if (!l) throw new Error("'불량수량' 시트에서 품번 리스트(주조·사상 머리글)를 찾지 못했습니다."); saveMaster(l, f.name + " (" + new Date().toLocaleDateString("ko-KR") + " 갱신)"); setupFilters(); render(); });
+  if (t.type === "file") t.value = "";
+});
+document.addEventListener("input", e => { if (e.target.id === "q") { S.q = e.target.value; const pos = e.target.selectionStart; render(); const q = $("#q"); q.focus(); q.setSelectionRange(pos, pos); } });
+document.addEventListener("mousemove", e => { const el = e.target.closest && e.target.closest("[data-tip]"), tip = $("#tip"); if (!el) { tip.style.display = "none"; return; } tip.innerHTML = el.dataset.tip; tip.style.display = "block"; const w = tip.offsetWidth; tip.style.left = Math.min(e.clientX + 14, innerWidth - w - 8) + "px"; tip.style.top = (e.clientY + 14) + "px"; });
+const drop = $("#drop");
+["dragenter", "dragover"].forEach(n => document.addEventListener(n, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(n => document.addEventListener(n, e => { e.preventDefault(); drop.classList.remove("over"); }));
+document.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) openSap(f); });
+
+loadMaster();
+$("#masterinfo").textContent = `관리 품번 리스트: ${S.master.length}개 주조 품번 · ${S.masterSrc}`;
+</script>
+</body>
+</html>
