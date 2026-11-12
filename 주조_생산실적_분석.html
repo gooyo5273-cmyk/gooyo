@@ -217,7 +217,7 @@ function parseSap(wb) {
 /* ---------- 집계 ---------- */
 const Z = () => ({ g: 0, h: 0, d: 0, s: [0, 0, 0] });
 const add = (m, k) => m.get(k) || (m.set(k, Z()), m.get(k));
-function met(o) { const g = o.g; return { g, h: o.h, bad: g - o.h, d: o.d, s: o.s, i: o.h - o.d, own: g ? (g - o.h) / g : null, post: g ? o.d / g : null, y: g ? (o.h - o.d) / g : null }; }
+function met(o) { const g = o.g; return { g, h: o.h, bad: g - o.h, d: o.d, s: o.s, i: o.h - o.d, own: g ? (g - o.h) / g : null, post: o.h ? o.d / o.h : null, y: g ? (o.h - o.d) / g : null }; }
 
 function compute() {
   const M = S.master, cast = new Map(), down = new Map();
@@ -313,12 +313,12 @@ function barChart(cats, vals, tips) {
   return `<svg viewBox="0 0 ${W} ${Hh}" width="100%" role="img">${g}</svg>`;
 }
 function stackH(items) { // 업체별 불량률 구성: 자공정 + 후공정
-  const W = 620, rowH = 34, L = 92, Rr = 70, pw = W - L - Rr, mx = Math.max(...items.map(t => (t.own || 0) + (t.post || 0)), .01);
+  const W = 620, rowH = 34, L = 92, Rr = 96, pw = W - L - Rr, mx = Math.max(...items.map(t => (t.own || 0) + (t.post || 0)), .01);
   let g = ""; items.forEach((t, i) => { const yy = 8 + i * rowH, a = pw * (t.own || 0) / mx, b = pw * (t.post || 0) / mx;
     g += `<text x="${L - 8}" y="${yy + 15}" text-anchor="end" class="v">${esc(t.name)}</text>
       <rect x="${L}" y="${yy}" width="${Math.max(0, a - 1)}" height="20" rx="3" fill="var(--s1)" ${tipAttr(`<b>${t.name}</b><br>자공정 불량률 ${fP(t.own)} (${fN(t.bad)}개)`)}/>
       <rect x="${L + a + 1}" y="${yy}" width="${Math.max(0, b - 1)}" height="20" rx="3" fill="var(--s2)" ${tipAttr(`<b>${t.name}</b><br>후공정 불량률 ${fP(t.post)} (${fN(t.d)}개)`)}/>
-      <text x="${L + a + b + 8}" y="${yy + 15}" class="v">${fP((t.own || 0) + (t.post || 0))}</text>`; });
+      <text x="${L + a + b + 8}" y="${yy + 15}" class="v">수율 ${fP(t.y, 1)}</text>`; });
   return `<svg viewBox="0 0 ${W} ${items.length * rowH + 12}" width="100%" role="img">${g}</svg>`;
 }
 
@@ -335,9 +335,9 @@ function viewSum() {
   const ven = vendors().map(v => ({ name: v, ...met(R.ven.get(v) || Z()) })).filter(v => v.g || v.h);
   const mon = R.useMon;
   return `${mon ? "" : basisNote()}<div class="grid kpis">
-    ${k("양품수율", fP(t.y), mon ? "최종 양품 ÷ 생산수량(모니터링)" : "최종 양품 ÷ 주조 생산수량(SAP)")}
+    ${k("양품수율", fP(t.y), "(1 − 자공정 불량률) × (1 − 후공정 불량률)")}
     ${k("자공정 불량률", fP(t.own), (mon ? "모니터링 − SAP 양품 " : "주조 불량 ") + fN(t.bad) + "개")}
-    ${k("후공정 불량률", fP(t.post), "사상·가공·조립 불량 " + fN(t.d) + "개")}
+    ${k("후공정 불량률", fP(t.post), "후공정 불량 " + fN(t.d) + "개 ÷ SAP 주조 양품")}
     ${k(mon ? "생산수량(모니터링)" : "주조 생산수량(SAP)", fN(t.g), "SAP 양품 " + fN(t.h) + "개")}
     ${k("일평균 생산수량", fN(nd ? t.g / nd : null), "실적 등록일 " + nd + "일 기준")}
   </div>
@@ -348,7 +348,7 @@ function viewSum() {
     <div class="card"><h2>업체별 불량률 구성</h2><div class="legend"><span><i style="background:var(--s1)"></i>자공정(주조) 불량률</span><span><i style="background:var(--s2)"></i>후공정 불량률</span></div>${stackH(ven)}</div>
   </div>
   <div class="card sec"><h2>업체별 실적</h2>${table("sumVen", [{ k: "name", t: "업체" }, ...yCols()], ven, { name: "합계", ...t })}
-  <div class="note">양품수율 = (SAP 주조 양품 − 후공정 불량) ÷ ${mon ? "생산수량(모니터링)" : "주조 생산수량"} · 자공정 불량률 = ${mon ? "(생산수량(모니터링) − SAP 주조 양품) ÷ 생산수량(모니터링)" : "주조 불량 ÷ 주조 생산수량"} · 후공정 불량은 관리 리스트의 사상·가공·조립/출하 품번에 등록된 불량수량</div>${mon ? basisNote() : ""}</div>`;
+  <div class="note">자공정 불량률 = ${mon ? "(생산수량(모니터링) − SAP 주조 양품) ÷ 생산수량(모니터링)" : "주조 불량 ÷ 주조 생산수량"} · 후공정 불량률 = 후공정 불량 ÷ SAP 주조 양품 · 양품수율 = (1 − 자공정 불량률) × (1 − 후공정 불량률) = 최종 양품 ÷ ${mon ? "생산수량(모니터링)" : "주조 생산수량"} · 후공정 불량은 관리 리스트의 사상·가공·조립/출하 품번에 등록된 불량수량</div>${mon ? basisNote() : ""}</div>`;
 }
 function viewYield() {
   const ms = selMonths(), vs = vendors();
@@ -507,7 +507,7 @@ function exportXlsx() {
   const wb = XLSX.utils.book_new(), ms = selMonths(), vs = vendors(), t = met(R.all), add = (n, ws) => XLSX.utils.book_append_sheet(wb, ws, n);
   const info = XLSX.utils.aoa_to_sheet([["주조 생산실적 분석 보고서"], ["기간", S.ymFrom + " ~ " + S.ymTo], ["구분", [...S.gu].join(", ")], ["SAP 파일", S.file], ["관리 품번", S.master.length + "개 (" + S.masterSrc + ")"],
     ["분모 기준", R.useMon ? "생산수량(모니터링) · " + S.mon.src : "SAP 주조 생산수량(양품+불량)"],
-    ["산식", R.useMon ? "양품수율 = (SAP 주조 양품 − 후공정 불량) ÷ 생산수량(모니터링) / 자공정 불량률 = (생산수량(모니터링) − SAP 주조 양품) ÷ 생산수량(모니터링) / 후공정 불량률 = 후공정 불량 ÷ 생산수량(모니터링)" : "양품수율 = (주조 양품 − 후공정 불량) ÷ 주조 생산수량 / 자공정 불량률 = 주조 불량 ÷ 주조 생산수량 / 후공정 불량률 = 후공정 불량 ÷ 주조 생산수량"],
+    ["산식", "자공정 불량률 = " + (R.useMon ? "(생산수량(모니터링) − SAP 주조 양품) ÷ 생산수량(모니터링)" : "주조 불량 ÷ 주조 생산수량") + " / 후공정 불량률 = 후공정 불량 ÷ SAP 주조 양품 / 양품수율 = (1 − 자공정 불량률) × (1 − 후공정 불량률)"],
     ["참고", "품번별·작업장별·금형별 시트는 SAP 생산수량 기준" + (R.useMon ? " (모니터링수량은 호기 단위)" : "")]]);
   info["!cols"] = [{ wch: 12 }, { wch: 90 }]; add("안내", info);
   add("업체별", sheet([{ k: "name", t: "업체" }, ...yCols()], vs.map(v => ({ name: v, ...met(R.ven.get(v) || Z()) })).filter(r => r.g || r.h), { name: "합계", ...t }));
